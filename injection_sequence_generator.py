@@ -7,6 +7,9 @@ class InjectionSequenceGenerator:
     """
     Simple example generator that yields a different 12-value vector
     each time `next_values()` is called.
+
+    Expected payload order:
+    [timing1, duration1, timing2, duration2, ..., timing6, duration6]
     """
 
     def __init__(self):

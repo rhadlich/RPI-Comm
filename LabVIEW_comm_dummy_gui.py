@@ -66,7 +66,7 @@ class DummyGUI:
 
         tk.Label(
             manual_frame,
-            text="Set 12 output values (6 injections: timing and duration):",
+            text="Set 12 output values (payload order: T1,D1,T2,D2,...,T6,D6):",
             anchor="w",
         ).grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 8))
 

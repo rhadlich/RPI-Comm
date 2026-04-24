@@ -14,6 +14,7 @@ BYTE_ORDER = ">"
 INCOMING_FLOAT_COUNT = 2
 OUTGOING_FLOAT_COUNT = 12
 SOCKET_TIMEOUT_SECONDS = 1.0
+INJECTION_EVENT_COUNT = 6
 
 
 def recv_exact(sock, expected_bytes, stop_event):
@@ -105,11 +106,11 @@ class TCPResponderApp:
 
         tk.Label(
             manual_frame,
-            text="Set 12 output values (6 injections: timing and duration):",
+            text="Set 12 output values (payload order: T1,D1,T2,D2,...,T6,D6):",
             anchor="w",
         ).grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 8))
 
-        for injection_idx in range(6):
+        for injection_idx in range(INJECTION_EVENT_COUNT):
             timing_idx = injection_idx * 2
             duration_idx = timing_idx + 1
 
