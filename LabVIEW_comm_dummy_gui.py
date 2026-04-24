@@ -75,7 +75,8 @@ class DummyGUI:
             sequence_frame, width=12, textvariable=self.sequence_length_var
         )
         self.sequence_length_entry.grid(row=4, column=0, sticky="w", pady=(0, 8))
-        self.sequence_length_var.trace_add("write", self.on_sequence_length_change)
+        self.sequence_length_entry.bind("<KeyRelease>", self.on_sequence_length_change)
+        self.sequence_length_entry.bind("<FocusOut>", self.on_sequence_length_change)
 
         for injection_idx in range(6):
             timing_idx = injection_idx * 2
@@ -162,7 +163,7 @@ class DummyGUI:
         self.apply_sequence_settings(show_status=False)
         self.status_var.set(f"Sequence sampling mode set to: {self.sequence_mode_var.get()} (dummy)")
 
-    def on_sequence_length_change(self, *_):
+    def on_sequence_length_change(self, _event=None):
         self.apply_sequence_settings(show_status=False)
 
     def apply_sequence_settings(self, show_status=True):
