@@ -1,4 +1,5 @@
 import tkinter as tk
+from tkinter import font as tkfont
 from tkinter import messagebox
 
 
@@ -11,14 +12,31 @@ class DummyGUI:
         self.sequence_mode = "indefinite"
         self.sequence_length = 10
         self._build_ui()
+        self.root.update_idletasks()
+        self.root.resizable(False, False)
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
+    def _configure_scaling(self):
+        default_font = tkfont.nametofont("TkDefaultFont")
+        text_font = tkfont.nametofont("TkTextFont")
+        fixed_font = tkfont.nametofont("TkFixedFont")
+        default_font.configure(size=14)
+        text_font.configure(size=14)
+        fixed_font.configure(size=14)
+        self.root.option_add("*Button.Padx", 10)
+        self.root.option_add("*Button.Pady", 6)
+        self.root.option_add("*Entry.Font", default_font)
+        self.section_title_font = tkfont.Font(
+            family=default_font.cget("family"), size=15, weight="bold"
+        )
+
     def _build_ui(self):
+        self._configure_scaling()
         frame = tk.Frame(self.root, padx=12, pady=12)
         frame.pack(fill="both", expand=True)
 
         self.mode_var = tk.StringVar(value="manual")
-        tk.Label(frame, text="Value source:").grid(
+        tk.Label(frame, text="Value source:", font=self.section_title_font).grid(
             row=0, column=0, sticky="w", padx=(0, 6), pady=(0, 8)
         )
         tk.Radiobutton(
@@ -36,10 +54,14 @@ class DummyGUI:
             command=self.on_mode_change,
         ).grid(row=0, column=2, sticky="w", pady=(0, 8))
 
-        manual_frame = tk.LabelFrame(frame, text="Manual Values", padx=10, pady=10)
+        manual_frame = tk.LabelFrame(
+            frame, text="Manual Values", font=self.section_title_font, padx=10, pady=10
+        )
         manual_frame.grid(row=1, column=0, columnspan=4, sticky="nw")
 
-        sequence_frame = tk.LabelFrame(frame, text="Sequence Options", padx=10, pady=10)
+        sequence_frame = tk.LabelFrame(
+            frame, text="Sequence Options", font=self.section_title_font, padx=10, pady=10
+        )
         sequence_frame.grid(row=1, column=5, columnspan=4, sticky="ne", padx=(30, 0))
 
         tk.Label(
@@ -82,20 +104,20 @@ class DummyGUI:
             timing_idx = injection_idx * 2
             duration_idx = timing_idx + 1
 
-            tk.Label(manual_frame, text=f"Inj {injection_idx + 1} timing").grid(
+            tk.Label(manual_frame, text=f"Inj {injection_idx + 1} timing (deg aTDC)").grid(
                 row=injection_idx + 1, column=0, sticky="w", padx=(0, 6), pady=2
             )
             timing_var = tk.StringVar(value="0.0")
-            tk.Entry(manual_frame, width=12, textvariable=timing_var).grid(
+            tk.Entry(manual_frame, width=16, textvariable=timing_var).grid(
                 row=injection_idx + 1, column=1, sticky="w", padx=(0, 12), pady=2
             )
             self.entry_vars.append((timing_idx, timing_var))
 
-            tk.Label(manual_frame, text=f"Inj {injection_idx + 1} duration").grid(
+            tk.Label(manual_frame, text=f"Inj {injection_idx + 1} duration (ms)").grid(
                 row=injection_idx + 1, column=2, sticky="w", padx=(0, 6), pady=2
             )
             duration_var = tk.StringVar(value="0.0")
-            tk.Entry(manual_frame, width=12, textvariable=duration_var).grid(
+            tk.Entry(manual_frame, width=16, textvariable=duration_var).grid(
                 row=injection_idx + 1, column=3, sticky="w", pady=2
             )
             self.entry_vars.append((duration_idx, duration_var))
