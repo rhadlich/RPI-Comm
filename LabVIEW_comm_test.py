@@ -603,7 +603,7 @@ class TCPResponderApp:
         if mode == "TRAJECTORY":
             if exec_mode == "drop_to_0":
                 return "NO_INJECTION"
-            if exec_mode in ("exploration_derate", "random_hold_constant", "boundary_hold"):
+            if exec_mode in ("exploration_derate", "boundary_hold"):
                 return "DERATE"
             if exec_mode == "boundary_backoff":
                 return "RECOVER"
