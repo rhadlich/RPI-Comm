@@ -1,3 +1,4 @@
+import os
 import socket
 import threading
 import tkinter as tk
@@ -9,6 +10,8 @@ from tkinter import messagebox
 import numpy as np
 
 from injection_sequence_generator import InjectionSequenceGenerator
+
+RT_PRIORITY = 80
 
 SERVER_IP = "192.168.1.5"
 SERVER_PORT = 54545
@@ -31,6 +34,32 @@ SOFT_LIMIT_DERATE_ENTRY_MPRR = 10.5
 HARD_LIMIT_AVG_MPRR = 11.0
 SINGLE_CYCLE_MPRR_LIMIT = 12.0
 BOUNDARY_MAX_CYCLES = 30
+
+
+def _set_thread_realtime_priority(priority=RT_PRIORITY):
+    """
+    Attempt SCHED_FIFO real-time scheduling for the calling thread.
+
+    On Linux this requires CAP_SYS_NICE or root. Grants the privilege before
+    calling via: sudo setcap cap_sys_nice+ep python3
+    On macOS or other platforms without sched_setscheduler the call is a no-op.
+
+    Returns (success: bool, message: str).
+    """
+    if not hasattr(os, "sched_setscheduler"):
+        return False, "Real-time scheduling not supported on this platform (skipped)."
+    try:
+        os.sched_setscheduler(0, os.SCHED_FIFO, os.sched_param(priority))
+        return True, f"RT scheduler: SCHED_FIFO priority={priority}."
+    except PermissionError:
+        return (
+            False,
+            f"Permission denied setting RT priority {priority}. "
+            "Run as root or grant CAP_SYS_NICE: "
+            "sudo setcap cap_sys_nice+ep $(which python3)",
+        )
+    except OSError as exc:
+        return False, f"Failed to set RT priority: {exc}"
 
 
 def recv_exact(sock, expected_bytes, stop_event):
@@ -597,7 +626,7 @@ class TCPResponderApp:
             or abs(float(action[1] - high[1])) < 1e-4
         ):
             return "boundary_hold"
-        return "exploration_derate"
+        return "explore"
 
     def _map_transport_mode(self, mode, exec_mode, cycle_zero_idx):
         if mode == "TRAJECTORY":
@@ -715,6 +744,9 @@ class TCPResponderApp:
         self.worker_thread.start()
 
     def _tcp_loop(self):
+        rt_ok, rt_msg = _set_thread_realtime_priority(RT_PRIORITY)
+        self.status_queue.put(("status", rt_msg))
+
         expected_bytes = INCOMING_FLOAT_COUNT * 4
         sock = None
         try:
