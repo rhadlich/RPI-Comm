@@ -26,6 +26,11 @@ MODE_CODE_MAP = {
     "BOUNDARY_PROBE": 5.0,
     "NO_INJECTION": 6.0,
 }
+SOFT_LIMIT_AVG_MPRR = 9.0
+SOFT_LIMIT_DERATE_ENTRY_MPRR = 10.5
+HARD_LIMIT_AVG_MPRR = 11.0
+SINGLE_CYCLE_MPRR_LIMIT = 12.0
+BOUNDARY_MAX_CYCLES = 30
 
 
 def recv_exact(sock, expected_bytes, stop_event):
@@ -58,6 +63,13 @@ class TCPResponderApp:
         self.output_mode = "MANUAL"
         self.execution_mode_text = "manual"
         self.recover_cycles_remaining = 0
+        self.soft_limit_cycles_over = 0
+        self.derate_active = False
+        self.active_anchor_action = np.zeros(3, dtype=np.float32)
+        self.last_trajectory_action = np.zeros(3, dtype=np.float32)
+        self.boundary_control_active = False
+        self.boundary_explore_cycles = 0
+        self.boundary_action = None
         self.mprr_window_n = 10
         self.mprr_history = []
 
@@ -541,6 +553,13 @@ class TCPResponderApp:
                 return
             self.output_mode = "TRAJECTORY"
             self.execution_mode_text = "warmup"
+            self.soft_limit_cycles_over = 0
+            self.derate_active = False
+            self.active_anchor_action = self.popup_vars["anchor"].copy()
+            self.last_trajectory_action = self.active_anchor_action.copy()
+            self.boundary_control_active = False
+            self.boundary_explore_cycles = 0
+            self.boundary_action = None
         self.mode_var.set("Mode: TRAJECTORY")
         self.exec_mode_var.set("Trajectory mode: warmup")
         self.generate_button.config(state=tk.DISABLED)
@@ -603,6 +622,89 @@ class TCPResponderApp:
         payload[INJECTION_PAYLOAD_FLOAT_COUNT] = np.float32(MODE_CODE_MAP[mode_name])
         return payload
 
+    def _compute_derate_factor(self, avg_mprr, window_n):
+        with self.mode_lock:
+            if avg_mprr > SOFT_LIMIT_AVG_MPRR:
+                self.soft_limit_cycles_over += 1
+            else:
+                self.soft_limit_cycles_over = 0
+                if avg_mprr < (SOFT_LIMIT_AVG_MPRR - 0.3):
+                    self.derate_active = False
+
+            if avg_mprr >= SOFT_LIMIT_DERATE_ENTRY_MPRR:
+                self.derate_active = True
+            elif self.soft_limit_cycles_over >= max(1, int(window_n)):
+                self.derate_active = True
+
+            derate_active = self.derate_active
+
+        if not derate_active:
+            return 1.0, False
+
+        if avg_mprr <= SOFT_LIMIT_DERATE_ENTRY_MPRR:
+            span = max(1e-6, SOFT_LIMIT_DERATE_ENTRY_MPRR - SOFT_LIMIT_AVG_MPRR)
+            frac = min(1.0, max(0.0, (avg_mprr - SOFT_LIMIT_AVG_MPRR) / span))
+            factor = 0.8 - (0.35 * frac)
+            return max(0.15, min(1.0, factor)), True
+
+        hard_span = max(1e-6, HARD_LIMIT_AVG_MPRR - SOFT_LIMIT_DERATE_ENTRY_MPRR)
+        frac = min(1.0, max(0.0, (avg_mprr - SOFT_LIMIT_DERATE_ENTRY_MPRR) / hard_span))
+        factor = 0.45 - (0.30 * frac)
+        return max(0.15, min(1.0, factor)), True
+
+    def _update_soft_limit_state(self, avg_mprr, window_n):
+        with self.mode_lock:
+            if avg_mprr > SOFT_LIMIT_AVG_MPRR:
+                self.soft_limit_cycles_over += 1
+            else:
+                self.soft_limit_cycles_over = 0
+
+            if avg_mprr >= SOFT_LIMIT_DERATE_ENTRY_MPRR:
+                self.derate_active = True
+                self.boundary_control_active = True
+            elif self.soft_limit_cycles_over >= max(1, int(window_n)):
+                self.derate_active = True
+                self.boundary_control_active = True
+
+            return self.derate_active, self.boundary_control_active
+
+    def _next_boundary_action(self, avg_mprr):
+        step_delta = np.asarray(
+            self.popup_vars.get("step_delta", np.zeros(3, dtype=np.float32)),
+            dtype=np.float32,
+        )
+        with self.mode_lock:
+            if self.boundary_action is None:
+                self.boundary_action = self.last_trajectory_action.copy()
+            action = self.boundary_action.copy()
+
+        if avg_mprr > SOFT_LIMIT_DERATE_ENTRY_MPRR:
+            action = action - step_delta
+            control_mode = "boundary_backoff"
+        elif avg_mprr >= SOFT_LIMIT_AVG_MPRR:
+            control_mode = "boundary_hold"
+        else:
+            action = action + (0.5 * step_delta)
+            control_mode = "boundary_reapproach"
+
+        with self.sequence_lock:
+            action = np.clip(action, self.sequence_generator.action_low, self.sequence_generator.action_high)
+            payload = self.sequence_generator.build_payload_from_action(action)
+
+        with self.mode_lock:
+            self.boundary_action = action.astype(np.float32)
+            self.last_trajectory_action = self.boundary_action.copy()
+            self.boundary_explore_cycles += 1
+            max_cycles_hit = self.boundary_explore_cycles >= BOUNDARY_MAX_CYCLES
+
+        return payload.astype(np.float32), action.astype(np.float32), control_mode, max_cycles_hit
+
+    def _build_anchor_return_payload(self):
+        with self.sequence_lock:
+            anchor = self.active_anchor_action.copy()
+            payload = self.sequence_generator.build_payload_from_action(anchor)
+        return payload.astype(np.float32), anchor
+
     def _start_worker(self):
         self.worker_thread = threading.Thread(target=self._tcp_loop, daemon=True)
         self.worker_thread.start()
@@ -624,7 +726,7 @@ class TCPResponderApp:
                 incoming_values = np.frombuffer(incoming, dtype=f"{BYTE_ORDER}f4")
                 self.status_queue.put(("received", incoming_values.tolist()))
 
-                latest_mprr = float(incoming_values[0]) if incoming_values.size > 0 else 0.0
+                latest_mprr = float(incoming_values[1]) if incoming_values.size > 1 else 0.0
                 with self.stats_lock:
                     self.mprr_history.append(latest_mprr)
                     max_keep = max(3000, self.mprr_window_n * 3)
@@ -640,17 +742,14 @@ class TCPResponderApp:
 
                 exec_mode = "manual"
                 cycle_zero_idx = -1
+                transport_mode = "WARMUP"
                 if mode == "TRAJECTORY":
-                    with self.sequence_lock:
-                        payload, action, _, done = self.sequence_generator.next_trajectory_values()
-                        cycle_zero_idx = self.sequence_generator.current_cycle - 1
-                    response_values = payload.astype(np.float32)
-                    exec_mode = self._classify_execution_mode(cycle_zero_idx, action)
-                    self.status_queue.put(
-                        ("trajectory_progress", (cycle_zero_idx + 1, self.popup_vars.get("length", 0), action.tolist(), exec_mode))
-                    )
-                    if done:
-                        anchor = self.popup_vars.get("anchor", np.zeros(3, dtype=np.float32))
+                    hard_limit_hit = avg > HARD_LIMIT_AVG_MPRR
+                    single_cycle_hit = latest_mprr > SINGLE_CYCLE_MPRR_LIMIT
+                    if hard_limit_hit or single_cycle_hit:
+                        response_values, anchor = self._build_anchor_return_payload()
+                        transport_mode = "ABORT"
+                        exec_mode = "abort_return_anchor"
                         with self.values_lock:
                             self.latest_values[1] = float(anchor[0])
                             self.latest_values[3] = float(anchor[1])
@@ -658,16 +757,113 @@ class TCPResponderApp:
                         with self.mode_lock:
                             self.output_mode = "MANUAL"
                             self.execution_mode_text = "manual"
-                            self.recover_cycles_remaining = 3
-                        self.status_queue.put(("trajectory_complete", anchor.copy()))
+                            self.recover_cycles_remaining = 0
+                            self.derate_active = False
+                            self.soft_limit_cycles_over = 0
+                            self.boundary_control_active = False
+                            self.boundary_explore_cycles = 0
+                            self.boundary_action = None
+                        reason = (
+                            f"Abort: avg MPRR={avg:.3f} > {HARD_LIMIT_AVG_MPRR:.1f}"
+                            if hard_limit_hit
+                            else f"Abort: single-cycle MPRR={latest_mprr:.3f} > {SINGLE_CYCLE_MPRR_LIMIT:.1f}"
+                        )
+                        self.status_queue.put(("trajectory_abort", (anchor.copy(), reason)))
+                    else:
+                        _, boundary_active = self._update_soft_limit_state(avg, n_value)
+                        if boundary_active:
+                            response_values, action, boundary_mode, max_cycles_hit = self._next_boundary_action(avg)
+                            exec_mode = "boundary_hold"
+                            transport_mode = "BOUNDARY_PROBE"
+                            with self.mode_lock:
+                                cycle_idx = self.boundary_explore_cycles
+                            self.status_queue.put(
+                                (
+                                    "trajectory_progress",
+                                    (
+                                        cycle_idx,
+                                        BOUNDARY_MAX_CYCLES,
+                                        action.tolist(),
+                                        exec_mode,
+                                    ),
+                                )
+                            )
+                            if max_cycles_hit:
+                                response_values, anchor = self._build_anchor_return_payload()
+                                with self.values_lock:
+                                    self.latest_values[1] = float(anchor[0])
+                                    self.latest_values[3] = float(anchor[1])
+                                    self.latest_values[2] = float(anchor[2])
+                                with self.mode_lock:
+                                    self.output_mode = "MANUAL"
+                                    self.execution_mode_text = "manual"
+                                    self.recover_cycles_remaining = 3
+                                    self.derate_active = False
+                                    self.soft_limit_cycles_over = 0
+                                    self.boundary_control_active = False
+                                    self.boundary_explore_cycles = 0
+                                    self.boundary_action = None
+                                self.status_queue.put(
+                                    (
+                                        "trajectory_abort",
+                                        (
+                                            anchor.copy(),
+                                            f"Boundary exploration capped at {BOUNDARY_MAX_CYCLES} cycles",
+                                        ),
+                                    )
+                                )
+                        else:
+                            derate_factor, derate_active = self._compute_derate_factor(avg, n_value)
+                            with self.sequence_lock:
+                                payload, action, _, done = self.sequence_generator.next_trajectory_values(
+                                    derate_factor=derate_factor
+                                )
+                                cycle_zero_idx = self.sequence_generator.current_cycle - 1
+                            response_values = payload.astype(np.float32)
+                            with self.mode_lock:
+                                self.last_trajectory_action = action.astype(np.float32)
+                            exec_mode = self._classify_execution_mode(cycle_zero_idx, action)
+                            if derate_active:
+                                exec_mode = "exploration_derate"
+                            self.status_queue.put(
+                                (
+                                    "trajectory_progress",
+                                    (
+                                        cycle_zero_idx + 1,
+                                        self.popup_vars.get("length", 0),
+                                        action.tolist(),
+                                        exec_mode,
+                                    ),
+                                )
+                            )
+                            transport_mode = self._map_transport_mode(mode, exec_mode, cycle_zero_idx)
+                            if derate_active and transport_mode == "EXPLORE":
+                                transport_mode = "DERATE"
+                            if done:
+                                anchor = self.popup_vars.get("anchor", np.zeros(3, dtype=np.float32))
+                                with self.values_lock:
+                                    self.latest_values[1] = float(anchor[0])
+                                    self.latest_values[3] = float(anchor[1])
+                                    self.latest_values[2] = float(anchor[2])
+                                with self.mode_lock:
+                                    self.output_mode = "MANUAL"
+                                    self.execution_mode_text = "manual"
+                                    self.recover_cycles_remaining = 3
+                                    self.derate_active = False
+                                    self.soft_limit_cycles_over = 0
+                                    self.boundary_control_active = False
+                                    self.boundary_explore_cycles = 0
+                                    self.boundary_action = None
+                                self.status_queue.put(("trajectory_complete", anchor.copy()))
                 else:
                     with self.values_lock:
                         response_values = self.latest_values.copy()
                     with self.mode_lock:
                         if self.recover_cycles_remaining > 0:
                             self.recover_cycles_remaining -= 1
-
-                transport_mode = self._map_transport_mode(mode, exec_mode, cycle_zero_idx)
+                            transport_mode = "RECOVER"
+                        else:
+                            transport_mode = "WARMUP"
                 tcp_payload_values = self._compose_tcp_payload(response_values, transport_mode)
                 self.status_queue.put(("tcp_mode", transport_mode))
 
@@ -700,6 +896,21 @@ class TCPResponderApp:
                         self.ready_progress_var.set(
                             f"Cycle {cycle_idx}/{length} | D1={action[0]:.3f}, D2={action[1]:.3f}, SOI2={action[2]:.3f}"
                         )
+                elif event_type == "trajectory_abort":
+                    anchor, reason = payload
+                    if anchor is not None:
+                        for idx, entry_var in self.entry_vars:
+                            if idx == 1:
+                                entry_var.set(f"{float(anchor[0]):.6g}")
+                            elif idx == 3:
+                                entry_var.set(f"{float(anchor[1]):.6g}")
+                            elif idx == 2:
+                                entry_var.set(f"{float(anchor[2]):.6g}")
+                    self.mode_var.set("Mode: MANUAL")
+                    self.exec_mode_var.set("Trajectory mode: ABORT")
+                    self.generate_button.config(state=tk.NORMAL)
+                    self._force_close_popup()
+                    self.status_var.set(f"{reason}. Returned to initial anchor in MANUAL mode.")
                 elif event_type == "tcp_mode":
                     self.status_var.set(
                         f"TCP mode={payload} (code={MODE_CODE_MAP[payload]:.0f})"
