@@ -27,6 +27,7 @@ MODE_CODE_MAP = {
     "DERATE": 2.0,
     "ABORT": 3.0,
     "RECOVER": 4.0,
+    "HOLD": 5.0,
     "NO_INJECTION": 6.0,
 }
 SOFT_LIMIT_AVG_MPRR = 9.0
@@ -632,6 +633,8 @@ class TCPResponderApp:
         if mode == "TRAJECTORY":
             if exec_mode == "drop_to_0":
                 return "NO_INJECTION"
+            if exec_mode == "random_hold_constant":
+                return "HOLD"
             if exec_mode in ("exploration_derate", "boundary_hold"):
                 return "DERATE"
             if exec_mode == "boundary_backoff":
