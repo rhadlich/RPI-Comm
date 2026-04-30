@@ -30,8 +30,8 @@ MODE_CODE_MAP = {
     "HOLD": 5.0,
     "NO_INJECTION": 6.0,
 }
-SOFT_LIMIT_AVG_MPRR = 9.0
-SOFT_LIMIT_DERATE_ENTRY_MPRR = 10.5
+SOFT_LIMIT_AVG_ENTRY_MPRR = 9.0
+SOFT_LIMIT_AVG_MAX_MPRR = 10.5
 HARD_LIMIT_AVG_MPRR = 11.0
 SINGLE_CYCLE_MPRR_LIMIT = 12.0
 BOUNDARY_MAX_CYCLES = 30
@@ -105,6 +105,11 @@ class TCPResponderApp:
         self.trajectory_start_time_s = None
         self.trajectory_warmup_seconds = 0.0
         self.mprr_window_n = 10
+        self.soft_limit_avg_entry_mprr = SOFT_LIMIT_AVG_ENTRY_MPRR
+        self.soft_limit_avg_max_mprr = SOFT_LIMIT_AVG_MAX_MPRR
+        self.hard_limit_avg_mprr = HARD_LIMIT_AVG_MPRR
+        self.single_cycle_mprr_limit = SINGLE_CYCLE_MPRR_LIMIT
+        self.boundary_max_cycles = BOUNDARY_MAX_CYCLES
         self.soft_limit_cycle_cap = SOFT_LIMIT_CYCLE_CAP_DEFAULT
         self.mprr_history = []
 
@@ -243,6 +248,11 @@ class TCPResponderApp:
         self.length_max_var = tk.StringVar(value="400")
         self.warmup_seconds_var = tk.StringVar(value="5.0")
         self.mprr_window_var = tk.StringVar(value=str(self.mprr_window_n))
+        self.soft_limit_avg_entry_var = tk.StringVar(value=str(self.soft_limit_avg_entry_mprr))
+        self.soft_limit_avg_max_var = tk.StringVar(value=str(self.soft_limit_avg_max_mprr))
+        self.hard_limit_avg_var = tk.StringVar(value=str(self.hard_limit_avg_mprr))
+        self.single_cycle_limit_var = tk.StringVar(value=str(self.single_cycle_mprr_limit))
+        self.boundary_max_cycles_var = tk.StringVar(value=str(self.boundary_max_cycles))
         self.soft_limit_cycle_cap_var = tk.StringVar(value=str(self.soft_limit_cycle_cap))
 
         row = 0
@@ -282,6 +292,31 @@ class TCPResponderApp:
         self.mprr_window_entry = tk.Entry(frame, width=10, textvariable=self.mprr_window_var)
         self.mprr_window_entry.grid(row=row, column=1, sticky="w")
         self.mprr_window_var.trace_add("write", self._on_mprr_window_change)
+        row += 1
+        tk.Label(frame, text="Soft-limit entry avg MPRR").grid(row=row, column=0, sticky="w")
+        self.soft_limit_avg_entry_entry = tk.Entry(frame, width=10, textvariable=self.soft_limit_avg_entry_var)
+        self.soft_limit_avg_entry_entry.grid(row=row, column=1, sticky="w")
+        self.soft_limit_avg_entry_var.trace_add("write", self._on_safety_limit_change)
+        row += 1
+        tk.Label(frame, text="Soft-limit max avg MPRR").grid(row=row, column=0, sticky="w")
+        self.soft_limit_avg_max_entry = tk.Entry(frame, width=10, textvariable=self.soft_limit_avg_max_var)
+        self.soft_limit_avg_max_entry.grid(row=row, column=1, sticky="w")
+        self.soft_limit_avg_max_var.trace_add("write", self._on_safety_limit_change)
+        row += 1
+        tk.Label(frame, text="Hard-limit avg MPRR").grid(row=row, column=0, sticky="w")
+        self.hard_limit_avg_entry = tk.Entry(frame, width=10, textvariable=self.hard_limit_avg_var)
+        self.hard_limit_avg_entry.grid(row=row, column=1, sticky="w")
+        self.hard_limit_avg_var.trace_add("write", self._on_safety_limit_change)
+        row += 1
+        tk.Label(frame, text="Single-cycle MPRR limit").grid(row=row, column=0, sticky="w")
+        self.single_cycle_limit_entry = tk.Entry(frame, width=10, textvariable=self.single_cycle_limit_var)
+        self.single_cycle_limit_entry.grid(row=row, column=1, sticky="w")
+        self.single_cycle_limit_var.trace_add("write", self._on_safety_limit_change)
+        row += 1
+        tk.Label(frame, text="Boundary max cycles").grid(row=row, column=0, sticky="w")
+        self.boundary_max_cycles_entry = tk.Entry(frame, width=10, textvariable=self.boundary_max_cycles_var)
+        self.boundary_max_cycles_entry.grid(row=row, column=1, sticky="w")
+        self.boundary_max_cycles_var.trace_add("write", self._on_safety_limit_change)
         row += 1
         tk.Label(frame, text="Soft-limit cycle cap").grid(row=row, column=0, sticky="w")
         self.soft_limit_cycle_cap_entry = tk.Entry(
@@ -353,6 +388,39 @@ class TCPResponderApp:
             return
         with self.mode_lock:
             self.soft_limit_cycle_cap = value
+
+    def _on_safety_limit_change(self, *_):
+        entry_text = self.soft_limit_avg_entry_var.get().strip()
+        max_text = self.soft_limit_avg_max_var.get().strip()
+        hard_text = self.hard_limit_avg_var.get().strip()
+        single_text = self.single_cycle_limit_var.get().strip()
+        boundary_cycles_text = self.boundary_max_cycles_var.get().strip()
+        if (
+            not entry_text
+            or not max_text
+            or not hard_text
+            or not single_text
+            or not boundary_cycles_text
+        ):
+            return
+        try:
+            entry_value = float(entry_text)
+            max_value = float(max_text)
+            hard_value = float(hard_text)
+            single_value = float(single_text)
+            boundary_cycles = int(boundary_cycles_text)
+            if boundary_cycles <= 0:
+                raise ValueError
+            if not (entry_value <= max_value <= hard_value <= single_value):
+                raise ValueError
+        except ValueError:
+            return
+        with self.mode_lock:
+            self.soft_limit_avg_entry_mprr = entry_value
+            self.soft_limit_avg_max_mprr = max_value
+            self.hard_limit_avg_mprr = hard_value
+            self.single_cycle_mprr_limit = single_value
+            self.boundary_max_cycles = boundary_cycles
 
     def apply_values(self):
         with self.mode_lock:
@@ -685,28 +753,32 @@ class TCPResponderApp:
     def _compute_derate_factor(self, avg_mprr):
         with self.mode_lock:
             derate_active = self.derate_active
+            soft_entry = self.soft_limit_avg_entry_mprr
+            soft_max = self.soft_limit_avg_max_mprr
 
         if not derate_active:
             return 1.0, False
 
-        span = max(1e-6, SOFT_LIMIT_DERATE_ENTRY_MPRR - SOFT_LIMIT_AVG_MPRR)
-        frac = min(1.0, max(0.0, (avg_mprr - SOFT_LIMIT_AVG_MPRR) / span))
+        span = max(1e-6, soft_max - soft_entry)
+        frac = min(1.0, max(0.0, (avg_mprr - soft_entry) / span))
         # Mild derate near 9.0 and near-zero movement near 10.5.
         factor = 0.85 - (0.80 * frac)
         return max(0.03, min(1.0, factor)), True
 
     def _update_soft_limit_state(self, avg_mprr):
         with self.mode_lock:
+            soft_entry = self.soft_limit_avg_entry_mprr
+            soft_max = self.soft_limit_avg_max_mprr
             inside_soft_band = (
-                SOFT_LIMIT_AVG_MPRR <= avg_mprr <= SOFT_LIMIT_DERATE_ENTRY_MPRR
+                soft_entry <= avg_mprr <= soft_max
             )
             if inside_soft_band:
                 self.soft_limit_cycles_over += 1
             else:
                 self.soft_limit_cycles_over = 0
 
-            self.derate_active = avg_mprr >= SOFT_LIMIT_AVG_MPRR
-            self.boundary_control_active = avg_mprr > SOFT_LIMIT_DERATE_ENTRY_MPRR
+            self.derate_active = avg_mprr >= soft_entry
+            self.boundary_control_active = avg_mprr > soft_max
             cap = max(1, int(self.soft_limit_cycle_cap))
             soft_limit_timeout = inside_soft_band and self.soft_limit_cycles_over > cap
 
@@ -722,10 +794,15 @@ class TCPResponderApp:
                 self.boundary_action = self.last_trajectory_action.copy()
             action = self.boundary_action.copy()
 
-        if avg_mprr > SOFT_LIMIT_DERATE_ENTRY_MPRR:
+        with self.mode_lock:
+            soft_entry = self.soft_limit_avg_entry_mprr
+            soft_max = self.soft_limit_avg_max_mprr
+            max_boundary_cycles = self.boundary_max_cycles
+
+        if avg_mprr > soft_max:
             action = action - step_delta
             control_mode = "boundary_backoff"
-        elif avg_mprr >= SOFT_LIMIT_AVG_MPRR:
+        elif avg_mprr >= soft_entry:
             control_mode = "boundary_hold"
         else:
             action = action + (0.5 * step_delta)
@@ -739,7 +816,7 @@ class TCPResponderApp:
             self.boundary_action = action.astype(np.float32)
             self.last_trajectory_action = self.boundary_action.copy()
             self.boundary_explore_cycles += 1
-            max_cycles_hit = self.boundary_explore_cycles >= BOUNDARY_MAX_CYCLES
+            max_cycles_hit = self.boundary_explore_cycles >= max_boundary_cycles
 
         return payload.astype(np.float32), action.astype(np.float32), control_mode, max_cycles_hit
 
@@ -816,8 +893,15 @@ class TCPResponderApp:
                     else:
                         with self.mode_lock:
                             self.trajectory_start_time_s = None
-                        hard_limit_hit = avg > HARD_LIMIT_AVG_MPRR
-                        single_cycle_hit = latest_mprr > SINGLE_CYCLE_MPRR_LIMIT
+                        with self.mode_lock:
+                            hard_limit_avg = self.hard_limit_avg_mprr
+                            single_cycle_limit = self.single_cycle_mprr_limit
+                            soft_entry = self.soft_limit_avg_entry_mprr
+                            soft_max = self.soft_limit_avg_max_mprr
+                            soft_cycle_cap = self.soft_limit_cycle_cap
+                            boundary_max_cycles = self.boundary_max_cycles
+                        hard_limit_hit = avg > hard_limit_avg
+                        single_cycle_hit = latest_mprr > single_cycle_limit
                         if hard_limit_hit or single_cycle_hit:
                             response_values, anchor = self._build_anchor_return_payload()
                             transport_mode = "ABORT"
@@ -838,9 +922,9 @@ class TCPResponderApp:
                                 self.trajectory_start_time_s = None
                                 self.trajectory_warmup_seconds = 0.0
                             reason = (
-                                f"Abort: avg MPRR={avg:.3f} > {HARD_LIMIT_AVG_MPRR:.1f}"
+                                f"Abort: avg MPRR={avg:.3f} > {hard_limit_avg:.1f}"
                                 if hard_limit_hit
-                                else f"Abort: single-cycle MPRR={latest_mprr:.3f} > {SINGLE_CYCLE_MPRR_LIMIT:.1f}"
+                                else f"Abort: single-cycle MPRR={latest_mprr:.3f} > {single_cycle_limit:.1f}"
                             )
                             self.status_queue.put(("trajectory_abort", (anchor.copy(), reason)))
                         else:
@@ -871,8 +955,8 @@ class TCPResponderApp:
                                             anchor.copy(),
                                             (
                                                 "Abort: avg MPRR remained within "
-                                                f"{SOFT_LIMIT_AVG_MPRR:.1f}-{SOFT_LIMIT_DERATE_ENTRY_MPRR:.1f} "
-                                                f"for more than {self.soft_limit_cycle_cap} cycles"
+                                                f"{soft_entry:.1f}-{soft_max:.1f} "
+                                                f"for more than {soft_cycle_cap} cycles"
                                             ),
                                         ),
                                     )
@@ -888,7 +972,7 @@ class TCPResponderApp:
                                         "trajectory_progress",
                                         (
                                             cycle_idx,
-                                            BOUNDARY_MAX_CYCLES,
+                                            boundary_max_cycles,
                                             action.tolist(),
                                             exec_mode,
                                         ),
@@ -916,7 +1000,7 @@ class TCPResponderApp:
                                             "trajectory_abort",
                                             (
                                                 anchor.copy(),
-                                                f"Boundary exploration capped at {BOUNDARY_MAX_CYCLES} cycles",
+                                                f"Boundary exploration capped at {boundary_max_cycles} cycles",
                                             ),
                                         )
                                     )
@@ -1126,6 +1210,11 @@ class TCPResponderApp:
         self.stop_button.config(state=tk.DISABLED)
         self.estop_button.config(state=tk.DISABLED)
         self.mprr_window_entry.config(state=tk.DISABLED)
+        self.soft_limit_avg_entry_entry.config(state=tk.DISABLED)
+        self.soft_limit_avg_max_entry.config(state=tk.DISABLED)
+        self.hard_limit_avg_entry.config(state=tk.DISABLED)
+        self.single_cycle_limit_entry.config(state=tk.DISABLED)
+        self.boundary_max_cycles_entry.config(state=tk.DISABLED)
         self.soft_limit_cycle_cap_entry.config(state=tk.DISABLED)
         self.status_var.set("Stopping communication...")
 
