@@ -35,7 +35,7 @@ SOFT_LIMIT_AVG_MAX_MPRR = 10.5
 HARD_LIMIT_AVG_MPRR = 11.0
 SINGLE_CYCLE_MPRR_LIMIT = 12.0
 BOUNDARY_MAX_CYCLES = 30
-SOFT_LIMIT_CYCLE_CAP_DEFAULT = 50
+SOFT_LIMIT_CYCLE_CAP_DEFAULT = 100
 
 
 def _set_thread_realtime_priority(priority=RT_PRIORITY):
@@ -232,20 +232,20 @@ class TCPResponderApp:
 
     def _build_settings_ui(self, frame):
         self.bound_vars = {
-            "d1_low": tk.StringVar(value="0.0"),
+            "d1_low": tk.StringVar(value="0.4"),
             "d1_high": tk.StringVar(value="0.9"),
             "d2_low": tk.StringVar(value="0.0"),
-            "d2_high": tk.StringVar(value="1.4"),
+            "d2_high": tk.StringVar(value="1.1"),
             "soi2_low": tk.StringVar(value="-140.0"),
             "soi2_high": tk.StringVar(value="-10.0"),
         }
         self.mode_prob_vars = {
             "smooth_ramp": tk.StringVar(value="0.45"),
             "step_hold": tk.StringVar(value="0.20"),
-            "no_injection": tk.StringVar(value="0.20"),
+            "no_injection": tk.StringVar(value="0.30"),
         }
-        self.length_min_var = tk.StringVar(value="200")
-        self.length_max_var = tk.StringVar(value="400")
+        self.length_min_var = tk.StringVar(value="300")
+        self.length_max_var = tk.StringVar(value="470")
         self.warmup_seconds_var = tk.StringVar(value="5.0")
         self.mprr_window_var = tk.StringVar(value=str(self.mprr_window_n))
         self.soft_limit_avg_entry_var = tk.StringVar(value=str(self.soft_limit_avg_entry_mprr))
