@@ -35,6 +35,7 @@ SOFT_LIMIT_DERATE_ENTRY_MPRR = 10.5
 HARD_LIMIT_AVG_MPRR = 11.0
 SINGLE_CYCLE_MPRR_LIMIT = 12.0
 BOUNDARY_MAX_CYCLES = 30
+SOFT_LIMIT_CYCLE_CAP_DEFAULT = 50
 
 
 def _set_thread_realtime_priority(priority=RT_PRIORITY):
@@ -104,6 +105,7 @@ class TCPResponderApp:
         self.trajectory_start_time_s = None
         self.trajectory_warmup_seconds = 0.0
         self.mprr_window_n = 10
+        self.soft_limit_cycle_cap = SOFT_LIMIT_CYCLE_CAP_DEFAULT
         self.mprr_history = []
 
         self.status_queue = Queue()
@@ -241,6 +243,7 @@ class TCPResponderApp:
         self.length_max_var = tk.StringVar(value="120")
         self.warmup_seconds_var = tk.StringVar(value="3.0")
         self.mprr_window_var = tk.StringVar(value=str(self.mprr_window_n))
+        self.soft_limit_cycle_cap_var = tk.StringVar(value=str(self.soft_limit_cycle_cap))
 
         row = 0
         tk.Label(frame, text="Global action bounds").grid(row=row, column=0, columnspan=3, sticky="w")
@@ -279,6 +282,13 @@ class TCPResponderApp:
         self.mprr_window_entry = tk.Entry(frame, width=10, textvariable=self.mprr_window_var)
         self.mprr_window_entry.grid(row=row, column=1, sticky="w")
         self.mprr_window_var.trace_add("write", self._on_mprr_window_change)
+        row += 1
+        tk.Label(frame, text="Soft-limit cycle cap").grid(row=row, column=0, sticky="w")
+        self.soft_limit_cycle_cap_entry = tk.Entry(
+            frame, width=10, textvariable=self.soft_limit_cycle_cap_var
+        )
+        self.soft_limit_cycle_cap_entry.grid(row=row, column=1, sticky="w")
+        self.soft_limit_cycle_cap_var.trace_add("write", self._on_soft_limit_cycle_cap_change)
 
     def _get_manual_values(self):
         values = np.zeros(INJECTION_PAYLOAD_FLOAT_COUNT, dtype=np.float32)
@@ -330,6 +340,19 @@ class TCPResponderApp:
         with self.stats_lock:
             self.mprr_window_n = value
         self.avg_mprr_var.set(f"Avg MPRR ({value}-cycle): --")
+
+    def _on_soft_limit_cycle_cap_change(self, *_):
+        text = self.soft_limit_cycle_cap_var.get().strip()
+        if not text:
+            return
+        try:
+            value = int(text)
+            if value <= 0:
+                raise ValueError
+        except ValueError:
+            return
+        with self.mode_lock:
+            self.soft_limit_cycle_cap = value
 
     def apply_values(self):
         with self.mode_lock:
@@ -659,51 +682,35 @@ class TCPResponderApp:
         payload[INJECTION_PAYLOAD_FLOAT_COUNT] = np.float32(MODE_CODE_MAP[mode_name])
         return payload
 
-    def _compute_derate_factor(self, avg_mprr, window_n):
+    def _compute_derate_factor(self, avg_mprr):
         with self.mode_lock:
-            if avg_mprr > SOFT_LIMIT_AVG_MPRR:
-                self.soft_limit_cycles_over += 1
-            else:
-                self.soft_limit_cycles_over = 0
-                if avg_mprr < (SOFT_LIMIT_AVG_MPRR - 0.3):
-                    self.derate_active = False
-
-            if avg_mprr >= SOFT_LIMIT_DERATE_ENTRY_MPRR:
-                self.derate_active = True
-            elif self.soft_limit_cycles_over >= max(1, int(window_n)):
-                self.derate_active = True
-
             derate_active = self.derate_active
 
         if not derate_active:
             return 1.0, False
 
-        if avg_mprr <= SOFT_LIMIT_DERATE_ENTRY_MPRR:
-            span = max(1e-6, SOFT_LIMIT_DERATE_ENTRY_MPRR - SOFT_LIMIT_AVG_MPRR)
-            frac = min(1.0, max(0.0, (avg_mprr - SOFT_LIMIT_AVG_MPRR) / span))
-            factor = 0.8 - (0.35 * frac)
-            return max(0.15, min(1.0, factor)), True
+        span = max(1e-6, SOFT_LIMIT_DERATE_ENTRY_MPRR - SOFT_LIMIT_AVG_MPRR)
+        frac = min(1.0, max(0.0, (avg_mprr - SOFT_LIMIT_AVG_MPRR) / span))
+        # Mild derate near 9.0 and near-zero movement near 10.5.
+        factor = 0.85 - (0.80 * frac)
+        return max(0.03, min(1.0, factor)), True
 
-        hard_span = max(1e-6, HARD_LIMIT_AVG_MPRR - SOFT_LIMIT_DERATE_ENTRY_MPRR)
-        frac = min(1.0, max(0.0, (avg_mprr - SOFT_LIMIT_DERATE_ENTRY_MPRR) / hard_span))
-        factor = 0.45 - (0.30 * frac)
-        return max(0.15, min(1.0, factor)), True
-
-    def _update_soft_limit_state(self, avg_mprr, window_n):
+    def _update_soft_limit_state(self, avg_mprr):
         with self.mode_lock:
-            if avg_mprr > SOFT_LIMIT_AVG_MPRR:
+            inside_soft_band = (
+                SOFT_LIMIT_AVG_MPRR <= avg_mprr <= SOFT_LIMIT_DERATE_ENTRY_MPRR
+            )
+            if inside_soft_band:
                 self.soft_limit_cycles_over += 1
             else:
                 self.soft_limit_cycles_over = 0
 
-            if avg_mprr >= SOFT_LIMIT_DERATE_ENTRY_MPRR:
-                self.derate_active = True
-                self.boundary_control_active = True
-            elif self.soft_limit_cycles_over >= max(1, int(window_n)):
-                self.derate_active = True
-                self.boundary_control_active = True
+            self.derate_active = avg_mprr >= SOFT_LIMIT_AVG_MPRR
+            self.boundary_control_active = avg_mprr > SOFT_LIMIT_DERATE_ENTRY_MPRR
+            cap = max(1, int(self.soft_limit_cycle_cap))
+            soft_limit_timeout = inside_soft_band and self.soft_limit_cycles_over > cap
 
-            return self.derate_active, self.boundary_control_active
+            return self.derate_active, self.boundary_control_active, soft_limit_timeout
 
     def _next_boundary_action(self, avg_mprr):
         step_delta = np.asarray(
@@ -837,8 +844,40 @@ class TCPResponderApp:
                             )
                             self.status_queue.put(("trajectory_abort", (anchor.copy(), reason)))
                         else:
-                            _, boundary_active = self._update_soft_limit_state(avg, n_value)
-                            if boundary_active:
+                            derate_active, boundary_active, soft_limit_timeout = self._update_soft_limit_state(avg)
+                            if soft_limit_timeout:
+                                response_values, anchor = self._build_anchor_return_payload()
+                                transport_mode = "ABORT"
+                                exec_mode = "abort_return_anchor"
+                                with self.values_lock:
+                                    self.latest_values[1] = float(anchor[0])
+                                    self.latest_values[3] = float(anchor[1])
+                                    self.latest_values[2] = float(anchor[2])
+                                with self.mode_lock:
+                                    self.output_mode = "MANUAL"
+                                    self.execution_mode_text = "manual"
+                                    self.recover_cycles_remaining = 3
+                                    self.derate_active = False
+                                    self.soft_limit_cycles_over = 0
+                                    self.boundary_control_active = False
+                                    self.boundary_explore_cycles = 0
+                                    self.boundary_action = None
+                                    self.trajectory_start_time_s = None
+                                    self.trajectory_warmup_seconds = 0.0
+                                self.status_queue.put(
+                                    (
+                                        "trajectory_abort",
+                                        (
+                                            anchor.copy(),
+                                            (
+                                                "Abort: avg MPRR remained within "
+                                                f"{SOFT_LIMIT_AVG_MPRR:.1f}-{SOFT_LIMIT_DERATE_ENTRY_MPRR:.1f} "
+                                                f"for more than {self.soft_limit_cycle_cap} cycles"
+                                            ),
+                                        ),
+                                    )
+                                )
+                            elif boundary_active:
                                 response_values, action, boundary_mode, max_cycles_hit = self._next_boundary_action(avg)
                                 exec_mode = boundary_mode
                                 transport_mode = self._map_transport_mode(mode, exec_mode, cycle_zero_idx)
@@ -882,7 +921,7 @@ class TCPResponderApp:
                                         )
                                     )
                             else:
-                                derate_factor, derate_active = self._compute_derate_factor(avg, n_value)
+                                derate_factor, _ = self._compute_derate_factor(avg)
                                 with self.sequence_lock:
                                     payload, action, _, done = self.sequence_generator.next_trajectory_values(
                                         derate_factor=derate_factor
@@ -970,6 +1009,16 @@ class TCPResponderApp:
                         self.ready_progress_var.set(
                             f"Cycle {cycle_idx}/{length} | D1={action[0]:.3f}, D2={action[1]:.3f}, SOI2={action[2]:.3f}"
                         )
+                    if hasattr(self, "derate_indicator_var"):
+                        self.derate_indicator_var.set(
+                            "DERATE" if exec_mode == "exploration_derate" else ""
+                        )
+                    if hasattr(self, "boundary_indicator_var"):
+                        self.boundary_indicator_var.set(
+                            "BOUNDARY CONTROL"
+                            if exec_mode in ("boundary_backoff", "boundary_hold", "boundary_reapproach")
+                            else ""
+                        )
                 elif event_type == "trajectory_abort":
                     anchor, reason = payload
                     if anchor is not None:
@@ -1002,6 +1051,10 @@ class TCPResponderApp:
                     self.exec_mode_var.set("Trajectory mode: manual")
                     self.generate_button.config(state=tk.NORMAL)
                     self.status_var.set("Trajectory complete. Returned to MANUAL mode.")
+                    if hasattr(self, "derate_indicator_var"):
+                        self.derate_indicator_var.set("")
+                    if hasattr(self, "boundary_indicator_var"):
+                        self.boundary_indicator_var.set("")
                 else:
                     self.status_var.set(payload)
         except Empty:
@@ -1025,6 +1078,20 @@ class TCPResponderApp:
         tk.Label(self.popup_content_frame, text=zero_drop_text).pack(anchor="w", pady=(0, 8))
         self.ready_progress_var = tk.StringVar(value="Status: waiting for trajectory cycles...")
         tk.Label(self.popup_content_frame, textvariable=self.ready_progress_var).pack(anchor="w", pady=(0, 10))
+        self.derate_indicator_var = tk.StringVar(value="")
+        self.boundary_indicator_var = tk.StringVar(value="")
+        tk.Label(
+            self.popup_content_frame,
+            textvariable=self.derate_indicator_var,
+            fg="red",
+            font=("TkDefaultFont", 10, "bold"),
+        ).pack(anchor="w")
+        tk.Label(
+            self.popup_content_frame,
+            textvariable=self.boundary_indicator_var,
+            fg="red",
+            font=("TkDefaultFont", 10, "bold"),
+        ).pack(anchor="w", pady=(0, 10))
         tk.Button(self.popup_content_frame, text="Close Popup", command=self._close_popup).pack(anchor="w")
 
     def _e_stop(self):
@@ -1059,6 +1126,7 @@ class TCPResponderApp:
         self.stop_button.config(state=tk.DISABLED)
         self.estop_button.config(state=tk.DISABLED)
         self.mprr_window_entry.config(state=tk.DISABLED)
+        self.soft_limit_cycle_cap_entry.config(state=tk.DISABLED)
         self.status_var.set("Stopping communication...")
 
     def on_close(self):
