@@ -228,20 +228,20 @@ class TCPResponderApp:
     def _build_settings_ui(self, frame):
         self.bound_vars = {
             "d1_low": tk.StringVar(value="0.0"),
-            "d1_high": tk.StringVar(value="4.0"),
+            "d1_high": tk.StringVar(value="0.9"),
             "d2_low": tk.StringVar(value="0.0"),
-            "d2_high": tk.StringVar(value="3.0"),
-            "soi2_low": tk.StringVar(value="-330.0"),
-            "soi2_high": tk.StringVar(value="-220.0"),
+            "d2_high": tk.StringVar(value="1.4"),
+            "soi2_low": tk.StringVar(value="-140.0"),
+            "soi2_high": tk.StringVar(value="-10.0"),
         }
         self.mode_prob_vars = {
             "smooth_ramp": tk.StringVar(value="0.45"),
             "step_hold": tk.StringVar(value="0.20"),
             "no_injection": tk.StringVar(value="0.20"),
         }
-        self.length_min_var = tk.StringVar(value="40")
-        self.length_max_var = tk.StringVar(value="120")
-        self.warmup_seconds_var = tk.StringVar(value="3.0")
+        self.length_min_var = tk.StringVar(value="200")
+        self.length_max_var = tk.StringVar(value="400")
+        self.warmup_seconds_var = tk.StringVar(value="5.0")
         self.mprr_window_var = tk.StringVar(value=str(self.mprr_window_n))
         self.soft_limit_cycle_cap_var = tk.StringVar(value=str(self.soft_limit_cycle_cap))
 
