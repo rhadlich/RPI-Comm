@@ -93,4 +93,6 @@ On macOS and other systems without `sched_setscheduler`, scheduling falls back t
 
 ## License
 
-No license file is included in this repository. Contact the maintainer for terms of use before redistribution.
+This project is licensed under the MIT License. See [LICENSE](LICENSE) for the full text.
+
+Copyright (c) 2026 Rodrigo Ristow Hadlich
