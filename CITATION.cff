@@ -1,0 +1,26 @@
+cff-version: 1.2.0
+title: Safe Transient Data Collection Algorithm for Internal Combustion Engines
+message: >-
+  If you use this software, please cite it using the metadata in this file.
+abstract: >-
+  Python TCP client and control GUI for closed-loop communication with a
+  LabVIEW test cell. Each engine cycle, the application receives feedback from
+  LabVIEW, computes injection setpoints (manual or trajectory-based), and
+  returns a binary payload with timing/duration values and an execution mode
+  code.
+authors:
+  - family-names: Ristow Hadlich
+    given-names: Rodrigo
+    email: rodrigohadlich@gmail.com
+    affiliation: Stony Brook University
+    orcid: "https://orcid.org/0000-0002-0000-7726"
+version: 1.0.0
+date-released: "2026-05-28"
+repository-code: "https://github.com/rhadlich/RPI-Comm"
+url: "https://github.com/rhadlich/RPI-Comm"
+keywords:
+  - LabVIEW
+  - Raspberry Pi
+  - TCP
+  - engine control
+  - closed-loop control
