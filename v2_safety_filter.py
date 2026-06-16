@@ -151,7 +151,32 @@ class KNNSafetyFilter:
 
         k = max(1, min(self.knn_config.k_neighbors, distances_sq.shape[1]))
         nearest_idx = np.argpartition(distances_sq, k - 1, axis=1)[:, :k]
-        return np.mean(self.example_mprr[nearest_idx], axis=1).astype(np.float32, copy=False)
+        nearest_mprr = self.example_mprr[nearest_idx]
+        nearest_dist_sq = np.take_along_axis(distances_sq, nearest_idx, axis=1)
+
+        # Use inverse-distance weighting; exact matches fall back to the mean of zero-distance neighbors.
+        zero_mask = nearest_dist_sq <= 1e-12
+        has_zero = np.any(zero_mask, axis=1)
+
+        weighted_pred = np.empty((actions_arr.shape[0],), dtype=np.float32)
+        if np.any(~has_zero):
+            non_zero_rows = ~has_zero
+            nearest_dist = np.sqrt(nearest_dist_sq[non_zero_rows], dtype=np.float32)
+            weights = 1.0 / np.maximum(nearest_dist, 1e-6)
+            numer = np.sum(weights * nearest_mprr[non_zero_rows], axis=1)
+            denom = np.sum(weights, axis=1)
+            weighted_pred[non_zero_rows] = (numer / np.maximum(denom, 1e-12)).astype(
+                np.float32, copy=False
+            )
+        if np.any(has_zero):
+            zero_rows = has_zero
+            zero_weights = zero_mask[zero_rows].astype(np.float32, copy=False)
+            numer = np.sum(zero_weights * nearest_mprr[zero_rows], axis=1)
+            denom = np.sum(zero_weights, axis=1)
+            weighted_pred[zero_rows] = (numer / np.maximum(denom, 1e-12)).astype(
+                np.float32, copy=False
+            )
+        return weighted_pred
 
     def predict_mprr_batch(self, actions: np.ndarray, bounds: ActionBounds) -> np.ndarray:
         return self._predict_mprr_batch(actions, bounds)
