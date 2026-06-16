@@ -99,14 +99,13 @@ class LabVIEWCommunicator:
         if worker is not None and worker.is_alive():
             worker.join(timeout=2.0)
 
-    def set_idle_payload(self, payload_12: np.ndarray, mode_name: str = "WARMUP") -> None:
+    def set_idle_payload(self, payload_12: np.ndarray) -> None:
+        """Set injection values sent while not collecting. Mode is always WARMUP."""
         payload = np.asarray(payload_12, dtype=np.float32).reshape(INJECTION_PAYLOAD_FLOAT_COUNT)
-        if mode_name not in MODE_CODE_MAP:
-            raise ValueError(f"Unknown mode name: {mode_name}")
-        tcp_bytes = self._build_tcp_bytes(payload, mode_name)
+        tcp_bytes = self._build_tcp_bytes(payload, "WARMUP")
         with self.state_lock:
             self.idle_payload = payload
-            self.idle_mode_name = mode_name
+            self.idle_mode_name = "WARMUP"
             self.idle_tcp_bytes = tcp_bytes
 
     def set_prepared_sequence(self, payloads_12: Sequence[np.ndarray], mode_names: Sequence[str]) -> None:
@@ -203,6 +202,7 @@ class LabVIEWCommunicator:
                 return payload_bytes, sent_cycles, total
 
             sent_cycles = min(idx, total)
+            # idle_tcp_bytes is always WARMUP; see set_idle_payload.
             return self.idle_tcp_bytes, sent_cycles, total
 
     def _try_raise_thread_priority(self) -> None:

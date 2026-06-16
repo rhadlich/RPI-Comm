@@ -334,10 +334,10 @@ class V2App:
     def _sync_idle_payload_to_communicator(self) -> None:
         if self.manual_idle_override_enabled and self.manual_idle_action is not None:
             idle_payload = self.generator.build_payload_from_action(self.manual_idle_action)
-            self.communicator.set_idle_payload(idle_payload, mode_name="HOLD")
+            self.communicator.set_idle_payload(idle_payload)
             return
         if self.prepared_idle_payload is not None:
-            self.communicator.set_idle_payload(self.prepared_idle_payload, mode_name="HOLD")
+            self.communicator.set_idle_payload(self.prepared_idle_payload)
 
     def _try_apply_manual_idle_override(self) -> bool:
         self._manual_apply_job = None
