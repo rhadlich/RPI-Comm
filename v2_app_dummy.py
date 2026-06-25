@@ -11,7 +11,9 @@ class V2AppDummy(V2App):
             communicator_cls=DummyLabVIEWCommunicator,
             window_title="LabVIEW Collector v2 (Dummy Preview)",
         )
-        self.status_var.set("Dummy preview mode: no TCP connection. Load safety CSV to begin.")
+        self.status_var.set(
+            "Dummy preview mode: no TCP connection. Configure SOI1 in Config Overrides -> PayloadConfig -> soi1_t1."
+        )
 
 
 def main() -> None:

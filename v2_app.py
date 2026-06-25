@@ -42,6 +42,7 @@ class V2App:
         self.payload_config = PayloadConfig()
         self.sequence_config_vars: dict[str, tk.StringVar] = {}
         self.knn_config_vars: dict[str, tk.StringVar] = {}
+        self.payload_config_vars: dict[str, tk.StringVar] = {}
 
         self.generator = RandomSequenceGenerator(
             sequence_config=self.sequence_config,
@@ -196,12 +197,17 @@ class V2App:
             f.name: tk.StringVar(value=str(getattr(self.knn_config, f.name)))
             for f in fields(KNNConfig)
         }
+        self.payload_config_vars = {
+            "soi1_t1": tk.StringVar(value=str(float(self.payload_config.default_payload_12[0]))),
+        }
 
     def _build_config_ui(self, parent: tk.Widget) -> None:
         seq_frame = tk.LabelFrame(parent, text="SequenceConfig", padx=6, pady=6)
         seq_frame.grid(row=0, column=0, sticky="nw")
         knn_frame = tk.LabelFrame(parent, text="KNNConfig", padx=6, pady=6)
         knn_frame.grid(row=0, column=1, sticky="nw", padx=(10, 0))
+        payload_frame = tk.LabelFrame(parent, text="PayloadConfig", padx=6, pady=6)
+        payload_frame.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(8, 0))
 
         seq_fields = [
             "base_anchor_hold_cycles",
@@ -235,8 +241,13 @@ class V2App:
                 row=row, column=1, sticky="w", padx=(8, 0), pady=1
             )
 
+        tk.Label(payload_frame, text="soi1_t1 (payload T1)").grid(row=0, column=0, sticky="w")
+        tk.Entry(payload_frame, width=12, textvariable=self.payload_config_vars["soi1_t1"]).grid(
+            row=0, column=1, sticky="w", padx=(8, 0), pady=1
+        )
+
         tk.Button(parent, text="Apply Config Overrides", command=self.apply_config_overrides).grid(
-            row=1, column=0, columnspan=2, sticky="w", pady=(8, 0)
+            row=2, column=0, columnspan=2, sticky="w", pady=(8, 0)
         )
 
     def _bound_row(self, parent: tk.Widget, row: int, label: str, low_key: str, high_key: str) -> None:
@@ -574,10 +585,23 @@ class V2App:
                 max_normalized_mean_distance=float(self.knn_config_vars["max_normalized_mean_distance"].get()),
                 max_resample_attempts_per_cycle=int(self.knn_config_vars["max_resample_attempts_per_cycle"].get()),
             )
+            payload_defaults = np.asarray(self.payload_config.default_payload_12, dtype=np.float32).copy()
+            payload_defaults[0] = np.float32(float(self.payload_config_vars["soi1_t1"].get()))
+            self.payload_config = PayloadConfig(default_payload_12=payload_defaults)
             self.generator = RandomSequenceGenerator(
                 sequence_config=self.sequence_config,
                 payload_config=self.payload_config,
             )
+            if self.filtered_actions is not None and self.prepared_modes:
+                self.prepared_payloads = [
+                    self.generator.build_payload_from_action(action)
+                    for action in np.asarray(self.filtered_actions, dtype=np.float32)
+                ]
+                self.communicator.set_prepared_sequence(
+                    payloads_12=self.prepared_payloads,
+                    mode_names=self.prepared_modes,
+                )
+            self._sync_idle_payload_to_communicator()
             if show_message:
                 self.status_var.set("Config overrides applied.")
         except Exception as exc:
