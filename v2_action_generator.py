@@ -33,7 +33,12 @@ class SafetyFilterResult(Protocol):
 
 
 class SequenceSafetyFilter(Protocol):
-    def filter_sequence(self, actions: np.ndarray, bounds: ActionBounds) -> SafetyFilterResult:
+    def filter_sequence(
+        self,
+        actions: np.ndarray,
+        bounds: ActionBounds,
+        anchor: np.ndarray | None = None,
+    ) -> SafetyFilterResult:
         ...
 
 
@@ -85,7 +90,11 @@ class RandomSequenceGenerator:
         anchor_vec = self.normalize_anchor(anchor, bounds)
         base_actions, base_specs = self._generate_base_block(anchor_vec, bounds)
         if safety_filter is not None:
-            base_filter_result = safety_filter.filter_sequence(actions=base_actions, bounds=bounds)
+            base_filter_result = safety_filter.filter_sequence(
+                actions=base_actions,
+                bounds=bounds,
+                anchor=anchor_vec,
+            )
             base_actions = np.asarray(base_filter_result.filtered_actions, dtype=np.float32)
             base_predicted_mprr = np.asarray(base_filter_result.predicted_mprr, dtype=np.float32)
         else:

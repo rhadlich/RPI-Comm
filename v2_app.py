@@ -484,9 +484,10 @@ class V2App:
                 predicted_mprr = np.full((bundle.actions.shape[0],), np.nan, dtype=np.float32)
             missing_mask = ~np.isfinite(predicted_mprr)
             if np.any(missing_mask):
-                predicted_mprr[missing_mask] = local_filter.predict_mprr_batch(
-                    bundle.actions[missing_mask], action_bounds
+                shifted_mprr = local_filter.predict_mprr_for_sequence(
+                    bundle.actions, action_bounds, np.asarray(anchor, dtype=np.float32)
                 )
+                predicted_mprr[missing_mask] = shifted_mprr[missing_mask]
             modes = [spec.mode_name for spec in bundle.specs]
             payloads = [local_generator.build_payload_from_action(action) for action in bundle.actions]
             idle_payload = local_generator.build_payload_from_action(np.asarray(anchor, dtype=np.float32))

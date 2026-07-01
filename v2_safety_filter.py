@@ -189,10 +189,64 @@ class KNNSafetyFilter:
         safe = predicted_mprr <= float(self.knn_config.safety_threshold)
         return safe, predicted_mprr
 
+    @staticmethod
+    def _shifted_filter_queries(actions: np.ndarray, anchor: np.ndarray) -> np.ndarray:
+        """
+        Build kNN query vectors for ID1 one-cycle delay:
+        queries[k] = [ID1[k], ID2[k+1], SOI2[k+1]].
+        At the last row, ID2/SOI2 come from anchor.
+        """
+        actions_arr = np.asarray(actions, dtype=np.float32)
+        anchor_vec = np.asarray(anchor, dtype=np.float32).reshape(3)
+        n = actions_arr.shape[0]
+        queries = np.empty_like(actions_arr)
+        queries[:, 0] = actions_arr[:, 0]
+        if n > 1:
+            queries[:-1, 1:] = actions_arr[1:, 1:]
+        queries[-1, 1] = anchor_vec[1]
+        queries[-1, 2] = anchor_vec[2]
+        return queries
+
+    @staticmethod
+    def _apply_safe_query_to_actions(
+        actions: np.ndarray,
+        k: int,
+        safe_query: np.ndarray,
+        anchor: np.ndarray,
+    ) -> bool:
+        """Write an interpolated query vector back into the action slots it came from."""
+        safe_vec = np.asarray(safe_query, dtype=np.float32).reshape(3)
+        n = actions.shape[0]
+        changed = False
+
+        if abs(float(actions[k, 0]) - float(safe_vec[0])) > 1e-7:
+            actions[k, 0] = safe_vec[0]
+            changed = True
+
+        if k + 1 < n:
+            if abs(float(actions[k + 1, 1]) - float(safe_vec[1])) > 1e-7:
+                actions[k + 1, 1] = safe_vec[1]
+                changed = True
+            if abs(float(actions[k + 1, 2]) - float(safe_vec[2])) > 1e-7:
+                actions[k + 1, 2] = safe_vec[2]
+                changed = True
+
+        return changed
+
+    def predict_mprr_for_sequence(
+        self,
+        actions: np.ndarray,
+        bounds: ActionBounds,
+        anchor: np.ndarray,
+    ) -> np.ndarray:
+        queries = self._shifted_filter_queries(actions, anchor)
+        return self._predict_mprr_batch(queries, bounds)
+
     def filter_sequence(
         self,
         actions: np.ndarray,
         bounds: ActionBounds,
+        anchor: np.ndarray | None = None,
     ) -> FilterResult:
         filtered = np.asarray(actions, dtype=np.float32).copy()
         if filtered.size == 0:
@@ -204,20 +258,31 @@ class KNNSafetyFilter:
                 predicted_mprr=np.zeros((0,), dtype=np.float32),
             )
 
-        predicted_mprr = self._predict_mprr_batch(filtered, bounds)
-        safe_mask = predicted_mprr <= float(self.knn_config.safety_threshold)
-        unsafe_idx = np.where(~safe_mask)[0]
+        if anchor is None:
+            raise ValueError("anchor is required for shifted kNN sequence filtering.")
+        anchor_vec = np.asarray(anchor, dtype=np.float32).reshape(3)
+
         replaced_count = 0
+        max_passes = 5
+        for _ in range(max_passes):
+            queries = self._shifted_filter_queries(filtered, anchor_vec)
+            predicted_mprr = self._predict_mprr_batch(queries, bounds)
+            safe_mask = predicted_mprr <= float(self.knn_config.safety_threshold)
+            unsafe_idx = np.where(~safe_mask)[0]
+            if unsafe_idx.size == 0:
+                break
 
-        for idx in unsafe_idx:
-            original = filtered[idx].copy()
-            candidate = self._interpolate_to_nearest_safe(original, bounds)
-            filtered[idx] = candidate.astype(np.float32)
-            replaced_count += int(np.linalg.norm(candidate - original) > 1e-7)
+            any_change = False
+            for idx in unsafe_idx:
+                candidate = self._interpolate_to_nearest_safe(queries[idx], bounds)
+                if self._apply_safe_query_to_actions(filtered, int(idx), candidate, anchor_vec):
+                    any_change = True
+                    replaced_count += 1
+            if not any_change:
+                break
 
-        final_predicted_mprr = predicted_mprr.astype(np.float32, copy=True)
-        if unsafe_idx.size > 0:
-            final_predicted_mprr[unsafe_idx] = self._predict_mprr_batch(filtered[unsafe_idx], bounds)
+        final_queries = self._shifted_filter_queries(filtered, anchor_vec)
+        final_predicted_mprr = self._predict_mprr_batch(final_queries, bounds)
         return FilterResult(
             filtered_actions=filtered,
             replaced_count=replaced_count,
